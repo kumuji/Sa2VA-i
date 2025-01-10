@@ -176,7 +176,6 @@ class GranDDataset(Dataset):
         return data_dict
 
     def __getitem__(self, index):
-
         index = index % self.real_len()
         json_file_path = self.json_data[index]
         with open(json_file_path, 'r') as f:
@@ -228,6 +227,9 @@ class GranDDataset(Dataset):
         data_dict = self.replace_image_str(data_dict, image_token_str)
 
         result = self.template_map_fn(data_dict)
+        for i in range(len(result["conversation"])):
+            result["conversation"][i]["input"] = result["conversation"][i]["input"].replace("[SEG]", "[SEG]" * self.num_tokens_per_expression)
+            result["conversation"][i]["output"] = result["conversation"][i]["output"].replace("[SEG]", "[SEG]" * self.num_tokens_per_expression)
         data_dict.update(result)
         result = video_lisa_encode_fn(data_dict, tokenizer=self.tokenizer, max_length=self.max_length,
                                       with_image_token=True)

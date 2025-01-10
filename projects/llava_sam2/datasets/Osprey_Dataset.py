@@ -227,7 +227,6 @@ class OspreyDataset(Dataset):
         return data_dict
 
     def __getitem__(self, index):
-
         index = index % self.real_len()
         data_dict = copy.deepcopy(self.text_data[index])
 

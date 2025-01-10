@@ -57,6 +57,7 @@ class ReferSegmDataset(RefCocoDataset):
                  single_image_mode=False,
                  arch_type: Literal['intern_vl', 'qwen'] = 'intern_vl',
                  preprocessor=None,
+                 num_tokens_per_expression=1,
                  **kwargs):
         super().__init__(
             data_root=data_root,
@@ -66,6 +67,7 @@ class ReferSegmDataset(RefCocoDataset):
             split_file=split_file,
             **kwargs,
         )
+        self.num_tokens_per_expression = num_tokens_per_expression
         self.begin_str = f'{DEFAULT_IMAGE_TOKEN}\n'
         if extra_image_processor is not None:
             self.extra_image_processor = BUILDER.build(extra_image_processor)
@@ -164,7 +166,7 @@ class ReferSegmDataset(RefCocoDataset):
             if i == 0:
                 question = self.begin_str + question
             conversation.append({'from': 'human', 'value': question})
-            conversation.append({'from': 'gpt', 'value': random.choice(ANSWER_LIST)})
+            conversation.append({'from': 'gpt', 'value': random.choice(ANSWER_LIST).replace("[SEG]", "[SEG]" * self.num_tokens_per_expression)})
         masks = torch.stack([torch.from_numpy(mask) for mask in masks], dim=0)
 
         ann_info.update({

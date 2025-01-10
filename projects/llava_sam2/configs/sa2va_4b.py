@@ -1,44 +1,72 @@
-from mmengine.hooks import (CheckpointHook, DistSamplerSeedHook, IterTimerHook,
-                            LoggerHook, ParamSchedulerHook)
+from mmengine.hooks import (
+    CheckpointHook,
+    DistSamplerSeedHook,
+    IterTimerHook,
+    LoggerHook,
+    ParamSchedulerHook,
+)
 from mmengine.optim import AmpOptimWrapper, CosineAnnealingLR, LinearLR
+from peft import LoraConfig
 from torch.optim import AdamW
 from transformers import AutoTokenizer
-
 from xtuner.dataset import ConcatDataset
+from xtuner.dataset.map_fns import template_map_fn_factory
 from xtuner.dataset.samplers import LengthGroupedSampler
 from xtuner.engine.hooks import DatasetInfoHook
 from xtuner.engine.runner import TrainLoop
 from xtuner.utils import PROMPT_TEMPLATE
-from xtuner.dataset.map_fns import template_map_fn_factory
 
-from third_parts.mmdet.models.losses import DiceLoss, CrossEntropyLoss
-from peft import LoraConfig
-
+from projects.llava_sam2.datasets import (
+    FlickrGCGDataset,
+    GranDfGCGDataset,
+    LLaVADataset,
+    OpenPsgGCGDataset,
+    OspreyDataset,
+    OspreyDescriptionDataset,
+    OspreyShortDescriptionDataset,
+    RefCOCOgGCGDataset,
+    ReferSegmDataset,
+    VideoChatUniViDataset,
+    VideoMeVISDataset,
+    VideoRefYoutubeVOSDataset,
+    VideoReVOSDataset,
+    VideoSAM2Dataset,
+    video_lisa_collate_fn,
+)
+from projects.llava_sam2.models import (
+    SAM2TrainRunner,
+    VideoLLaVASAMModel,
+    VideoLLaVASAMModel_zero3,
+)
 from projects.llava_sam2.models.internvl import InternVL_Slowfast
-
-from projects.llava_sam2.models import VideoLLaVASAMModel, SAM2TrainRunner, VideoLLaVASAMModel_zero3
-from projects.llava_sam2.datasets import VideoReVOSDataset, VideoMeVISDataset, VideoRefYoutubeVOSDataset, video_lisa_collate_fn, VideoSAM2Dataset
-from projects.llava_sam2.datasets import VideoChatUniViDataset
-from projects.llava_sam2.datasets import RefCOCOgGCGDataset, OpenPsgGCGDataset, FlickrGCGDataset, GranDfGCGDataset, OspreyDataset, OspreyDescriptionDataset, OspreyShortDescriptionDataset
-from projects.llava_sam2.datasets import LLaVADataset
-from projects.llava_sam2.datasets import ReferSegmDataset
 from projects.llava_sam2.models.preprocess.image_resize import DirectResize
+from third_parts.mmdet.models.losses import CrossEntropyLoss, DiceLoss
+
+language_data_path = "/alexey/data/language-data"
+coco_path = f"{language_data_path}/coco"
+glamm_data_root = f"{language_data_path}/grandf"
+osprey_path = f"{language_data_path}/Osprey-724K"
+revos_path = f"{language_data_path}/revos/REVOS"
+mevis_path = f"{language_data_path}/mevis/train"
+refytvos_path = f"{language_data_path}/youtube-vos"
+video_chatunivi_path = f"{language_data_path}/Chat-UniVi-Instruct/Fine-tuning/VIDEO"
+llava_dataset_path = f"{language_data_path}/llava_dataset/LLaVA-Instruct-150K"
+
+# Model
+path = "/alexey/saved/sam2/InternVL2_5-4B"
+pretrained_pth = None
 
 #######################################################################
 #                          PART 1  Settings                           #
 #######################################################################
-# Model
-path = './pretrained/InternVL2_5-4B'
-pretrained_pth = None
 
 # Data
-template = "phi3_chat"
 prompt_template = PROMPT_TEMPLATE.phi3_chat
 max_length = 8192
 
 # Scheduler & Optimizer
-batch_size = 2  # per_device
-accumulative_counts = 4
+batch_size = 1  # per_device
+accumulative_counts = 1
 dataloader_num_workers = 4
 max_epochs = 1
 optim_type = AdamW
@@ -50,17 +78,22 @@ weight_decay = 0.05
 max_norm = 1  # grad clip
 warmup_ratio = 0.05
 
+num_frames = 8
+tarvis_num_frames = 8
+num_tokens_per_expression = 1
+
 # Save
 save_steps = 1000
 save_total_limit = 2  # Maximum checkpoints to keep (-1 means unlimited)
 
-special_tokens = ['[SEG]', '<p>', '</p>', '<vp>', '</vp>']
+special_tokens = ["[SEG]", "<p>", "</p>", "<vp>", "</vp>"]
 
 tokenizer = dict(
     type=AutoTokenizer.from_pretrained,
     pretrained_model_name_or_path=path,
     trust_remote_code=True,
-    padding_side='right')
+    padding_side="right",
+)
 
 extra_image_processor = dict(
     type=DirectResize,
@@ -83,8 +116,9 @@ model = dict(
             r=128,
             lora_alpha=256,
             lora_dropout=0.05,
-            bias='none',
-            task_type='CAUSAL_LM'),
+            bias="none",
+            task_type="CAUSAL_LM",
+        ),
         special_tokens=special_tokens,
     ),
     tokenizer=tokenizer,
@@ -92,18 +126,17 @@ model = dict(
         type=SAM2TrainRunner,
     ),
     loss_mask=dict(
-        type=CrossEntropyLoss,
-        use_sigmoid=True,
-        reduction='mean',
-        loss_weight=2.0),
+        type=CrossEntropyLoss, use_sigmoid=True, reduction="mean", loss_weight=2.0
+    ),
     loss_dice=dict(
         type=DiceLoss,
         use_sigmoid=True,
         activate=True,
-        reduction='mean',
+        reduction="mean",
         naive_dice=True,
         eps=1.0,
-        loss_weight=0.5),
+        loss_weight=0.5,
+    ),
     pretrained_pth=pretrained_pth,
     loss_sample_points=True,
     # loss_sample_points=False,
@@ -114,24 +147,22 @@ model = dict(
 #                      PART 3  Dataset & Dataloader                   #
 #######################################################################
 
-DATA_ROOT = './data/'
-VIDEO_DATA_ROOT = DATA_ROOT + 'video_datas/'
+
+# VIDEO_DATAS = './data/video_datas/'
+# IMG_DATAS = './data/image_datas/'
 
 ############### video res
-data_root_revos = VIDEO_DATA_ROOT + 'revos/'
-video_revos_image_folder = data_root_revos
-video_revos_expression_file = data_root_revos + 'meta_expressions_train_.json'
-video_revos_mask_file = data_root_revos + 'mask_dict.json'
+video_revos_image_folder = f"{revos_path}/JPEGImages"
+video_revos_expression_file = f"{revos_path}/meta_expressions_train_.json"
+video_revos_mask_file = f"{revos_path}/mask_dict.json"
 
-data_root_mevis = VIDEO_DATA_ROOT + 'mevis/train/'
-video_mevis_image_folder = data_root_mevis + 'JPEGImages'
-video_mevis_expression_file = data_root_mevis + 'meta_expressions.json'
-video_mevis_mask_file = data_root_mevis + 'mask_dict.json'
+video_mevis_image_folder = f"{mevis_path}/JPEGImages"
+video_mevis_expression_file = f"{mevis_path}/meta_expressions.json"
+video_mevis_mask_file = f"{mevis_path}/mask_dict.json"
 
-data_root_refytvos = VIDEO_DATA_ROOT + 'rvos/'
-video_refytvos_image_folder = data_root_refytvos + 'train/JPEGImages/'
-video_refytvos_expression_file = data_root_refytvos + 'meta_expressions/train/meta_expressions.json'
-video_refytvos_mask_file = data_root_refytvos + 'mask_dict.pkl'
+video_refytvos_image_folder = f"{refytvos_path}/train/JPEGImages/"
+video_refytvos_expression_file = f"{refytvos_path}/meta_expressions/train/meta_expressions.json"
+video_refytvos_mask_file = f"{refytvos_path}/mask_dict.pkl"
 
 video_revos_dataset = dict(
     type=VideoReVOSDataset,
@@ -139,14 +170,15 @@ video_revos_dataset = dict(
     expression_file=video_revos_expression_file,
     mask_file=video_revos_mask_file,
     tokenizer=tokenizer,
-    template_map_fn=dict(
-        type=template_map_fn_factory, template=prompt_template),
+    template_map_fn=dict(type=template_map_fn_factory, template=prompt_template),
     max_length=max_length,
     lazy=True,
     repeats=10,
     special_tokens=special_tokens,
     extra_image_processor=extra_image_processor,
-    sampled_frames=5,
+    sampled_frames=num_frames,
+    tarvis_sampled_frames=tarvis_num_frames,
+    num_tokens_per_expression=num_tokens_per_expression,
 )
 
 video_mevis_dataset = dict(
@@ -155,14 +187,15 @@ video_mevis_dataset = dict(
     expression_file=video_mevis_expression_file,
     mask_file=video_mevis_mask_file,
     tokenizer=tokenizer,
-    template_map_fn=dict(
-        type=template_map_fn_factory, template=prompt_template),
+    template_map_fn=dict(type=template_map_fn_factory, template=prompt_template),
     max_length=max_length,
     lazy=True,
     repeats=4,
     special_tokens=special_tokens,
     extra_image_processor=extra_image_processor,
-    sampled_frames=5,
+    sampled_frames=num_frames,
+    tarvis_sampled_frames=tarvis_num_frames,
+    num_tokens_per_expression=num_tokens_per_expression,
 )
 
 video_refytvos_dataset = dict(
@@ -171,103 +204,101 @@ video_refytvos_dataset = dict(
     expression_file=video_refytvos_expression_file,
     mask_file=video_refytvos_mask_file,
     tokenizer=tokenizer,
-    template_map_fn=dict(
-        type=template_map_fn_factory, template=prompt_template),
+    template_map_fn=dict(type=template_map_fn_factory, template=prompt_template),
     max_length=max_length,
     lazy=True,
     repeats=4,
     special_tokens=special_tokens,
     extra_image_processor=extra_image_processor,
-    sampled_frames=5,
+    sampled_frames=num_frames,
+    tarvis_sampled_frames=tarvis_num_frames,
+    num_tokens_per_expression=num_tokens_per_expression,
 )
 
 ################### Video chat
-data_root_video_chatunivi = VIDEO_DATA_ROOT + 'chat_univi/'
-video_chatunivi_image_folder = data_root_video_chatunivi + 'Activity_Videos/'
-video_chatunivi_json_file = data_root_video_chatunivi+ 'video_chat.json'
+video_chatunivi_image_folder = f"{video_chatunivi_path}/Activity_Videos/"
+video_chatunivi_json_file = f"{video_chatunivi_path}/video_chat.json"
 
 video_qa_dataset = dict(
     type=VideoChatUniViDataset,
     image_folder=video_chatunivi_image_folder,
     json_file=video_chatunivi_json_file,
     tokenizer=tokenizer,
-    template_map_fn=dict(
-        type=template_map_fn_factory, template=prompt_template),
+    template_map_fn=dict(type=template_map_fn_factory, template=prompt_template),
     max_length=max_length,
     lazy=True,
     repeats=1,
     special_tokens=special_tokens,
     extra_image_processor=extra_image_processor,
-    sampled_frames=5,
+    sampled_frames=num_frames,
 )
 
 ################## image chat
-LLAVA_ROOT = DATA_ROOT + 'llava_data/'
 llava_vqa_dataset = dict(
     type=LLaVADataset,
     tokenizer=tokenizer,
-    data_path=LLAVA_ROOT + 'LLaVA-Instruct-150K/llava_v1_5_mix665k.json',
+    data_path=f"{llava_dataset_path}/llava_v1_5_mix665k.json",
     prompt_template=prompt_template,
     special_tokens=special_tokens,
-    image_folder=LLAVA_ROOT + 'llava_images/',
+    image_folder=f"{llava_dataset_path}/llava_images/",
 )
 
 ################## image res
-RES_ROOT = DATA_ROOT + 'ref_seg/'
-refcoco_segm_dataset=dict(
+refcoco_segm_dataset = dict(
     type=ReferSegmDataset,
     tokenizer=tokenizer,
     special_tokens=special_tokens,
     extra_image_processor=extra_image_processor,
-    data_root=RES_ROOT + 'refcoco',
-    data_prefix=dict(img_path='coco2014/train2014/'),
-    ann_file='instances.json',
-    split_file='refs(unc).p',
+    data_root=f"{language_data_path}/refer_seg/refcoco",
+    data_prefix=dict(img_path=f"{coco_path}/train2014/"),
+    ann_file="instances.json",
+    split_file="refs(unc).p",
     prompt_template=prompt_template,
     num_classes_per_sample=5,
     max_length=max_length,
+    num_tokens_per_expression=num_tokens_per_expression,
 )
-refcoco_plus_segm_dataset=dict(
+refcoco_plus_segm_dataset = dict(
     type=ReferSegmDataset,
     tokenizer=tokenizer,
     special_tokens=special_tokens,
     extra_image_processor=extra_image_processor,
-    data_root=RES_ROOT + 'refcoco+',
-    data_prefix=dict(img_path='coco2014/train2014/'),
-    ann_file='instances.json',
-    split_file='refs(unc).p',
+    data_root=f"{language_data_path}/refer_seg/refcoco+",
+    data_prefix=dict(img_path=f"{coco_path}/train2014/"),
+    ann_file="instances.json",
+    split_file="refs(unc).p",
     prompt_template=prompt_template,
     num_classes_per_sample=5,
     max_length=max_length,
+    num_tokens_per_expression=num_tokens_per_expression,
 )
-refcocog_segm_dataset=dict(
+refcocog_segm_dataset = dict(
     type=ReferSegmDataset,
     tokenizer=tokenizer,
     special_tokens=special_tokens,
     extra_image_processor=extra_image_processor,
-    data_root= RES_ROOT + 'refcocog',
-    data_prefix=dict(img_path='coco2014/train2014/'),
-    ann_file='instances.json',
-    split_file='refs(umd).p',
+    data_root=f"{language_data_path}/refer_seg/refcocog",
+    data_prefix=dict(img_path=f"{coco_path}/train2014/"),
+    ann_file="instances.json",
+    split_file="refs(umd).p",
     prompt_template=prompt_template,
     num_classes_per_sample=5,
     max_length=max_length,
+    num_tokens_per_expression=num_tokens_per_expression,
 )
 
 # image gcg datas
-glamm_data_root = DATA_ROOT + 'glamm_data/'
+refcocog_image_path = f"{glamm_data_root}/coco_2014/train2014"
+refcocog_ann_file = f"{glamm_data_root}/GranDf/annotations/train/RefCOCOg_GCG_train.json"
 
-refcocog_image_path = glamm_data_root + 'images/coco2014/train2014/'
-refcocog_ann_file = glamm_data_root + 'annotations/RefCOCOg_GCG_train.json'
+grandf_image_path = f"{glamm_data_root}/GranDf_HA_images/train/"
+grandf_ann_file = f"{glamm_data_root}/GranDf/annotations/train/GranDf_HA_GCG_train.json"
 
-grandf_image_path = glamm_data_root + 'images/grandf/train/'
-grandf_ann_file = glamm_data_root + 'annotations/GranDf_HA_GCG_train.json'
+flickr_image_path = f"{glamm_data_root}/flickr30k/flickr30k-images/"
+flickr_ann_file = f"{glamm_data_root}/GranDf/annotations/train/flickr_mergedGT_GCG_train.json"
 
-flickr_image_path = glamm_data_root + 'images/flickr30k/Flickr30K/'
-flickr_ann_file = glamm_data_root + 'annotations/flickr_mergedGT_GCG_train.json'
-
-psg_image_path = glamm_data_root + 'images/coco2017/'
-psg_ann_file = glamm_data_root + 'annotations/OpenPsgGCG_train.json'
+psg_image_path = f"{glamm_data_root}/coco_2017/"
+psg_ann_file = f"{glamm_data_root}/GranDf/annotations/train/OpenPsgGCG_train.json"
 
 glamm_refcocog_dataset = dict(
     type=RefCOCOgGCGDataset,
@@ -280,6 +311,7 @@ glamm_refcocog_dataset = dict(
     extra_image_processor=extra_image_processor,
     lazy=True,
     repeats=1,
+    num_tokens_per_expression=num_tokens_per_expression,
 )
 
 glamm_grandf_dataset = dict(
@@ -293,6 +325,7 @@ glamm_grandf_dataset = dict(
     extra_image_processor=extra_image_processor,
     lazy=True,
     repeats=10,
+    num_tokens_per_expression=num_tokens_per_expression,
 )
 
 glamm_psg_dataset = dict(
@@ -306,6 +339,7 @@ glamm_psg_dataset = dict(
     extra_image_processor=extra_image_processor,
     lazy=True,
     repeats=1,
+    num_tokens_per_expression=num_tokens_per_expression,
 )
 
 glamm_flickr_dataset = dict(
@@ -319,36 +353,37 @@ glamm_flickr_dataset = dict(
     extra_image_processor=extra_image_processor,
     lazy=True,
     repeats=1,
+    num_tokens_per_expression=num_tokens_per_expression,
 )
 
-# sam2 data
-data_sam2_folder = VIDEO_DATA_ROOT + 'segmentation_datasets/sam_v_full/'
-data_sam2_expression_file = './whole_pesudo_cap_v3/sam_v_final_v3.json'
+# # sam2 data
+data_sam2_folder = '/alexey/data/sav'
+data_sam2_expression_file = '/alexey/data/sav/Ref-SAV.json'
 
 video_sam2_dataset = dict(
     type=VideoSAM2Dataset,
     sam2_folder=data_sam2_folder,
     expression_file=data_sam2_expression_file,
     tokenizer=tokenizer,
-    template_map_fn=dict(
-        type=template_map_fn_factory, template=prompt_template),
+    template_map_fn=dict(type=template_map_fn_factory, template=prompt_template),
     max_length=max_length,
     lazy=True,
     repeats=4,
     special_tokens=special_tokens,
     extra_image_processor=extra_image_processor,
-    sampled_frames=5,
+    sampled_frames=num_frames,
+    tarvis_sampled_frames=tarvis_num_frames,
     select_number=5,
+    num_tokens_per_expression=num_tokens_per_expression,
 )
 
 # osprey
-OSPREY_ROOT = DATA_ROOT + "osprey-724k/"
-data_osprey_file = OSPREY_ROOT + 'Osprey-724K/osprey_conversation.json'
+data_osprey_file = f"{osprey_path}/osprey_conversation.json"
 data_osprey_image_folders = [
-    OSPREY_ROOT + 'coco/train2014/',
-    OSPREY_ROOT + 'coco/val2014/',
-    OSPREY_ROOT + 'coco/train2017/',
-    OSPREY_ROOT + 'coco/val2017/',
+    f"{coco_path}/train2014/",
+    f"{coco_path}/val2014/",
+    f"{coco_path}/train2017/",
+    f"{coco_path}/val2017/",
 ]
 
 image_osprey_dataset = dict(
@@ -356,64 +391,59 @@ image_osprey_dataset = dict(
     image_folder=data_osprey_image_folders,
     data_path=data_osprey_file,
     tokenizer=tokenizer,
-    template_map_fn=dict(
-        type=template_map_fn_factory, template=prompt_template),
+    template_map_fn=dict(type=template_map_fn_factory, template=prompt_template),
     max_length=max_length,
     lazy=True,
     repeats=1,
     special_tokens=special_tokens,
 )
 
-data_osprey_detail_description_file = OSPREY_ROOT + 'Osprey-724K/osprey_detail_description.json'
+data_osprey_detail_description_file = f"{osprey_path}/osprey_detail_description.json"
 image_osprey_description_dataset = dict(
     type=OspreyDescriptionDataset,
     image_folder=data_osprey_image_folders,
     data_path=data_osprey_detail_description_file,
     tokenizer=tokenizer,
-    template_map_fn=dict(
-        type=template_map_fn_factory, template=prompt_template),
+    template_map_fn=dict(type=template_map_fn_factory, template=prompt_template),
     max_length=max_length,
     lazy=True,
     repeats=1,
     special_tokens=special_tokens,
 )
 
-data_osprey_short_file = OSPREY_ROOT + 'Osprey-724K/osprey_short_form.json'
+data_osprey_short_file = f"{osprey_path}/osprey_short_form.json"
 image_osprey_short_dataset = dict(
     type=OspreyShortDescriptionDataset,
     image_folder=data_osprey_image_folders,
     data_path=data_osprey_short_file,
     tokenizer=tokenizer,
-    template_map_fn=dict(
-        type=template_map_fn_factory, template=prompt_template),
+    template_map_fn=dict(type=template_map_fn_factory, template=prompt_template),
     max_length=max_length,
     lazy=True,
     repeats=1,
     special_tokens=special_tokens,
 )
 
-data_osprey_part_file = OSPREY_ROOT + 'Osprey-724K/osprey_part_level.json'
+data_osprey_part_file = f"{osprey_path}/osprey_part_level.json"
 image_osprey_part_dataset = dict(
     type=OspreyDataset,
     image_folder=data_osprey_image_folders,
     data_path=data_osprey_part_file,
     tokenizer=tokenizer,
-    template_map_fn=dict(
-        type=template_map_fn_factory, template=prompt_template),
+    template_map_fn=dict(type=template_map_fn_factory, template=prompt_template),
     max_length=max_length,
     lazy=True,
     repeats=1,
     special_tokens=special_tokens,
 )
 
-data_osprey_positive_neg_file = OSPREY_ROOT + 'Osprey-724K/osprey_lvis_positive_negative.json'
+data_osprey_positive_neg_file = f"{osprey_path}/osprey_lvis_positive_negative.json"
 image_osprey_positive_neg_dataset = dict(
     type=OspreyDataset,
     image_folder=data_osprey_image_folders,
     data_path=data_osprey_positive_neg_file,
     tokenizer=tokenizer,
-    template_map_fn=dict(
-        type=template_map_fn_factory, template=prompt_template),
+    template_map_fn=dict(type=template_map_fn_factory, template=prompt_template),
     max_length=max_length,
     lazy=True,
     repeats=1,
@@ -421,18 +451,29 @@ image_osprey_positive_neg_dataset = dict(
 )
 
 train_dataset = dict(
-    type=ConcatDataset, datasets=[
+    type=ConcatDataset,
+    datasets=[
         # sem seg
         # semantic_seg_ade20k_dataset,
         # ref seg
-        refcoco_segm_dataset, refcoco_plus_segm_dataset, refcocog_segm_dataset,
-        refcoco_segm_dataset, refcoco_plus_segm_dataset, refcocog_segm_dataset,
-        refcoco_segm_dataset, refcoco_plus_segm_dataset, refcocog_segm_dataset,
-        refcoco_segm_dataset, refcoco_plus_segm_dataset, refcocog_segm_dataset,
+        refcoco_segm_dataset,
+        refcoco_plus_segm_dataset,
+        refcocog_segm_dataset,
+        refcoco_segm_dataset,
+        refcoco_plus_segm_dataset,
+        refcocog_segm_dataset,
+        refcoco_segm_dataset,
+        refcoco_plus_segm_dataset,
+        refcocog_segm_dataset,
+        refcoco_segm_dataset,
+        refcoco_plus_segm_dataset,
+        refcocog_segm_dataset,
         # image qa
         llava_vqa_dataset,
         # video res
-        video_mevis_dataset, video_revos_dataset, video_refytvos_dataset,
+        video_mevis_dataset,
+        video_revos_dataset,
+        video_refytvos_dataset,
         # video chat
         video_qa_dataset,
         # sam2 pesudo
@@ -443,20 +484,24 @@ train_dataset = dict(
         glamm_flickr_dataset,
         glamm_refcocog_dataset,
         # visual prompt
-        image_osprey_dataset, image_osprey_description_dataset,
-        image_osprey_part_dataset, image_osprey_short_dataset,
+        image_osprey_dataset,
+        image_osprey_description_dataset,
+        image_osprey_part_dataset,
+        image_osprey_short_dataset,
         image_osprey_positive_neg_dataset,
-    ]
+    ],
 )
+
 train_dataloader = dict(
     batch_size=batch_size,
     num_workers=dataloader_num_workers,
     dataset=train_dataset,
     sampler=dict(
         type=LengthGroupedSampler,
-        length_property='modality_length',
-        per_device_batch_size=batch_size * accumulative_counts),
-    collate_fn=dict(type=video_lisa_collate_fn)
+        length_property="modality_length",
+        per_device_batch_size=batch_size * accumulative_counts,
+    ),
+    collate_fn=dict(type=video_lisa_collate_fn),
 )
 
 #######################################################################
@@ -465,12 +510,11 @@ train_dataloader = dict(
 # optimizer
 optim_wrapper = dict(
     type=AmpOptimWrapper,
-    optimizer=dict(
-        type=optim_type, lr=lr, betas=betas, weight_decay=weight_decay),
+    optimizer=dict(type=optim_type, lr=lr, betas=betas, weight_decay=weight_decay),
     clip_grad=dict(max_norm=max_norm, error_if_nonfinite=False),
     accumulative_counts=accumulative_counts,
-    loss_scale='dynamic',
-    dtype='bfloat16'
+    loss_scale="dynamic",
+    dtype="bfloat16",
 )
 
 # learning policy
@@ -482,14 +526,16 @@ param_scheduler = [
         by_epoch=True,
         begin=0,
         end=warmup_ratio * max_epochs,
-        convert_to_iter_based=True),
+        convert_to_iter_based=True,
+    ),
     dict(
         type=CosineAnnealingLR,
         eta_min=0.0,
         by_epoch=True,
         begin=warmup_ratio * max_epochs,
         end=max_epochs,
-        convert_to_iter_based=True)
+        convert_to_iter_based=True,
+    ),
 ]
 
 # train, val, test setting
@@ -514,10 +560,11 @@ default_hooks = dict(
     # save checkpoint per `save_steps`.
     checkpoint=dict(
         type=CheckpointHook,
-        save_optimizer=False,
+        save_optimizer=True,
         by_epoch=False,
         interval=save_steps,
-        max_keep_ckpts=save_total_limit),
+        max_keep_ckpts=save_total_limit,
+    ),
     # set sampler seed in distributed evrionment.
     sampler_seed=dict(type=DistSamplerSeedHook),
 )
@@ -527,25 +574,33 @@ env_cfg = dict(
     # whether to enable cudnn benchmark
     cudnn_benchmark=False,
     # set multi process parameters
-    mp_cfg=dict(mp_start_method='fork', opencv_num_threads=0),
+    mp_cfg=dict(mp_start_method="fork", opencv_num_threads=0),
     # set distributed parameters
-    dist_cfg=dict(backend='nccl'),
+    dist_cfg=dict(backend="nccl"),
 )
 
 # set visualizer
-visualizer = None
+visualizer = dict(
+    type='Visualizer',
+    vis_backends=[
+        dict(
+            type='TensorboardVisBackend',
+            # save_dir='tensorboard_logs'  # Set the log folder to save_folder
+        )
+    ]
+)
 
 # set log level
-log_level = 'INFO'
+log_level = "INFO"
 
 # load from which checkpoint
 load_from = None
 
 # whether to resume training from the loaded checkpoint
-resume = False
+resume = True
 
 # Defaults to use random seed and disable `deterministic`
-randomness = dict(seed=None, deterministic=False)
+randomness = dict(seed=42, deterministic=False)
 
 # set log processor
 log_processor = dict(by_epoch=False)

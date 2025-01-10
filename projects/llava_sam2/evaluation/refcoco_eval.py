@@ -2,71 +2,79 @@ import argparse
 import copy
 import math
 import os
-import torch
-import tqdm
-from pycocotools import mask as _mask
+import tempfile
+
 import numpy as np
-import random
-
-from transformers import (AutoModel, AutoModelForCausalLM, AutoTokenizer,
-                          BitsAndBytesConfig, CLIPImageProcessor,
-                          CLIPVisionModel, GenerationConfig)
-
-from utils import _init_dist_pytorch, get_dist_info, get_rank, collect_results_cpu
+import torch
 from dataset import RESDataset
+from pycocotools import mask as _mask
+from tqdm import tqdm
+from transformers import AutoModel, AutoTokenizer
+from utils import _init_dist_pytorch, collect_results_cpu, get_dist_info, get_rank
+
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='RefCocoSeg')
-    parser.add_argument('model_path', help='hf model path.')
+    parser = argparse.ArgumentParser(description="RefCocoSeg")
+    parser.add_argument("model_path", help="hf model path.")
     parser.add_argument(
-        '--dataset',
+        "--data_path",
+        help="Language data path",
+    )
+    parser.add_argument(
+        "--dataset",
         choices=DATASETS_ATTRIBUTES.keys(),
-        default='refcoco',
-        help='Specify a ref dataset')
+        default="refcoco",
+        help="Specify a ref dataset",
+    )
+    parser.add_argument("--split", default="val", help="Specify a split")
     parser.add_argument(
-        '--split',
-        default='val',
-        help='Specify a split')
-    parser.add_argument(
-        '--launcher',
-        choices=['none', 'pytorch', 'slurm', 'mpi'],
-        default='none',
-        help='job launcher')
-    parser.add_argument('--local_rank', '--local-rank', type=int, default=0)
+        "--launcher",
+        choices=["none", "pytorch", "slurm", "mpi"],
+        default="none",
+        help="job launcher",
+    )
+    parser.add_argument("--local_rank", "--local-rank", type=int, default=0)
     args = parser.parse_args()
-    if 'LOCAL_RANK' not in os.environ:
-        os.environ['LOCAL_RANK'] = str(args.local_rank)
+    if "LOCAL_RANK" not in os.environ:
+        os.environ["LOCAL_RANK"] = str(args.local_rank)
     return args
 
-DATASETS_ATTRIBUTES = {
-    'refcoco': {'splitBy': "unc", 'dataset_name': 'refcoco'},
-    'refcoco_plus': {'splitBy': "unc", 'dataset_name': 'refcoco_plus'},
-    'refcocog': {'splitBy': "umd", 'dataset_name': 'refcocog'},
-}
 
-IMAGE_FOLDER = './data/glamm_data/images/coco2014/train2014/'
-DATA_PATH = './data/ref_seg/'
+DATASETS_ATTRIBUTES = {
+    "refcoco": {"splitBy": "unc", "dataset_name": "refcoco"},
+    "refcoco_plus": {"splitBy": "unc", "dataset_name": "refcoco_plus"},
+    "refcocog": {"splitBy": "umd", "dataset_name": "refcocog"},
+}
 
 
 def main():
     args = parse_args()
 
-    if args.launcher != 'none':
-        _init_dist_pytorch('nccl')
+    if args.launcher != "none":
+        _init_dist_pytorch("nccl")
         rank, world_size = get_dist_info()
         torch.cuda.set_device(rank)
     else:
         rank = 0
         world_size = 1
 
-    # build model
-    model = AutoModel.from_pretrained(
-        args.model_path,
-        torch_dtype=torch.bfloat16,
-        low_cpu_mem_usage=True,
-        use_flash_attn=True,
-        trust_remote_code=True,
-    ).eval().cuda()
+    # Build model
+    print(args)
+    # language_data_path = "/nodes/cristal/work/nekrasov/data/language-data"
+    language_data_path = args.data_path
+    IMAGE_FOLDER = f"{language_data_path}/coco/train2014"
+    DATA_PATH = f"{language_data_path}/refer_seg"
+    model = (
+        AutoModel.from_pretrained(
+            args.model_path,
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+            use_flash_attn=True,
+            trust_remote_code=True,
+        )
+        .eval()
+        .cuda()
+    )
 
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_path,
@@ -76,53 +84,103 @@ def main():
 
     dataset = RESDataset(
         image_folder=IMAGE_FOLDER,
-        dataset_name=dataset_info['dataset_name'],
+        dataset_name=dataset_info["dataset_name"],
         data_path=DATA_PATH,
         split=args.split,
     )
+    print(f"dataset len: {len(dataset)}")
 
     results = []
     n_samples = len(dataset)
     per_rank_samples = math.ceil(n_samples / world_size) + 1
-    per_rank_ids = range(per_rank_samples * rank,
-                         min(n_samples, per_rank_samples * (rank + 1)))
-    for idx in tqdm.tqdm(per_rank_ids):
-        data_batch = dataset[idx]
-        prediction = {'img_id': data_batch['img_id'], 'gt_masks': data_batch['gt_masks']}
-        prediction['gt_masks'] = mask_to_rle(prediction['gt_masks'].cpu().numpy())
-        del data_batch['img_id'], data_batch['gt_masks']
+    per_rank_ids = range(
+        per_rank_samples * rank, min(n_samples, per_rank_samples * (rank + 1))
+    )
 
-        texts = data_batch['text']
-        del data_batch['text']
-        pred_masks = []
-        for text in texts:
-            _data_batch = copy.deepcopy(data_batch)
-            _data_batch['text'] = text
-            pred_mask = model.predict_forward(**_data_batch, tokenizer=tokenizer)['prediction_masks']
-            if len(pred_mask) == 0:
-                # give a zero mask
-                print("No seg pred !!!")
-                pred_masks.append(None)
-            else:
-                _ret_mask = pred_mask[0].cpu().numpy()
-                _ret_mask = mask_to_rle(_ret_mask)
-                pred_masks.append(_ret_mask)
+    with torch.inference_mode():
+        with tqdm(
+            total=per_rank_samples - 1,
+            desc=f"Rank {rank}: Processing videos",
+            position=rank,  # Ensure tqdm doesn't overwrite
+            leave=False,
+            # disable=not (rank == 0),  # Only show progress bar for rank 0
+        ) as pbar:
+            for idx in per_rank_ids:
+                data_batch = dataset[idx]
+                prediction = {
+                    "img_id": data_batch["img_id"],
+                    "gt_masks": data_batch["gt_masks"],
+                }
+                prediction["gt_masks"] = mask_to_rle(
+                    prediction["gt_masks"].cpu().numpy()
+                )
+                del data_batch["img_id"], data_batch["gt_masks"]
 
-        prediction.update({'prediction_masks': pred_masks})
-        results.append(prediction)
+                texts = data_batch["text"]
+                del data_batch["text"]
+                pred_masks = []
+                for text in texts:
+                    _data_batch = copy.deepcopy(data_batch)
+                    _data_batch["text"] = text
+                    pred_mask = model.predict_forward(
+                        **_data_batch, tokenizer=tokenizer
+                    )["prediction_masks"]
+                    if len(pred_mask) == 0:
+                        print("No seg pred !!!")
+                        pred_masks.append(None)
+                    else:
+                        _ret_mask = pred_mask[0]
+                        _ret_mask = mask_to_rle(_ret_mask)
+                        pred_masks.append(_ret_mask)
 
-    tmpdir = './dist_test_temp_res_' + args.dataset + args.split + args.model_path.replace('/', '').replace('.', '')
-    results = collect_results_cpu(results, len(dataset), tmpdir=tmpdir)
-    if get_rank() == 0:
-        metric = dataset.evaluate(results, './work_dirs')
-        print(metric)
+                prediction.update({"prediction_masks": pred_masks})
+                results.append(prediction)
+                pbar.update(1)
+
+        # Create a shared temporary directory
+        if rank == 0:
+            tmpdir = tempfile.mkdtemp()
+        else:
+            tmpdir = None
+
+        # Broadcast the temporary directory path to all processes
+        if world_size > 1:
+            tmpdir = [tmpdir]
+            torch.distributed.broadcast_object_list(tmpdir, src=0)
+            tmpdir = tmpdir[0]
+
+        # Collect results using the temporary directory
+        results = collect_results_cpu(results, len(dataset), tmpdir=tmpdir)
+
+        # Synchronize all processes before cleanup
+        if world_size > 1:
+            torch.distributed.barrier()
+
+        # Only rank 0 evaluates the results
+        if rank == 0:
+            metric = dataset.evaluate(results, None)
+            print(metric)
+
+        # Clean up the temporary directory
+        if rank == 0:
+            import shutil
+
+            shutil.rmtree(tmpdir)
+
+        if world_size > 1:
+            torch.distributed.barrier()
+
+        if rank == 0:
+            print("Done")
+
 
 def mask_to_rle(mask):
     rle = []
     for m in mask:
         rle.append(_mask.encode(np.asfortranarray(m.astype(np.uint8))))
-        rle[-1]['counts'] = rle[-1]['counts'].decode()
+        rle[-1]["counts"] = rle[-1]["counts"].decode()
     return rle
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

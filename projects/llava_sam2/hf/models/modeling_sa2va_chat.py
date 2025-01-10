@@ -589,6 +589,7 @@ class Sa2VAChatModel(PreTrainedModel):
             past_text='',
             mask_prompts=None,
             tokenizer=None,
+            sample_num_frames=5,
     ):
         if not self.init_prediction_config:
             assert tokenizer
@@ -619,16 +620,28 @@ class Sa2VAChatModel(PreTrainedModel):
         else:
             input_dict = {}
             if video is not None:
+
                 pixel_values = []
                 extra_pixel_values = []
                 ori_image_size = video[0].size
+                # Number of frames in the video
+                num_frames = len(video)
+                # Generate 5 (or fewer, if the video is short) uniformly spaced indices
+                # if num_frames <= sample_num_frames:
+                #     sample_idx = list(range(num_frames))
+                # else:
+                sample_idx = np.linspace(0, num_frames - 1, sample_num_frames, dtype=int).tolist()
                 for frame_idx, frame_image in enumerate(video):
+                    # Ensure all frames have the same size
                     assert ori_image_size == frame_image.size
-                    g_image = np.array(frame_image)  # for grounding
+                    # Convert frame to a NumPy array for extra processing
+                    g_image = np.array(frame_image)  # grounding image
                     g_image = self.extra_image_processor.apply_image(g_image)
                     g_image = torch.from_numpy(g_image).permute(2, 0, 1).contiguous()
                     extra_pixel_values.append(g_image)
-                    if frame_idx < 5:
+                    # Instead of `if frame_idx < 5:`, use uniform sampling
+                    if frame_idx in sample_idx:
+                        # Apply your transformer (e.g. CLIP transform)
                         img = self.transformer(frame_image)
                         pixel_values.append(img)
 
@@ -754,16 +767,25 @@ class Sa2VAChatModel(PreTrainedModel):
         for seg_hidden_states in all_seg_hidden_states:
             seg_hidden_states = seg_hidden_states.unsqueeze(0)
             g_pixel_values = input_dict['g_pixel_values']
-            sam_states = self.grounding_encoder.get_sam2_embeddings(g_pixel_values)
-            pred_masks = self.grounding_encoder.language_embd_inference(sam_states, [seg_hidden_states] * num_frames)
+
+            language_embeddings = torch.cat([seg_hidden_states] * len(sample_idx), dim=0)[:, None]
+            sam_states = self.grounding_encoder.get_sam2_embeddings_training_like(g_pixel_values[sample_idx])
+            pred_masks = self.grounding_encoder.language_embd_inference(sam_states, language_embeddings, sample_idx)
             w, h = ori_image_size
+            masks = F.interpolate(pred_masks, size=(h, w), mode='bilinear', align_corners=False)
+            masks = masks[:, 0]
+            masks = masks.sigmoid() > 0.5
+            masks = masks.cpu().numpy()
+            pred_masks = self.grounding_encoder.train_postprocess(g_pixel_values, masks, sample_idx)
             masks = F.interpolate(pred_masks, size=(h, w), mode='bilinear', align_corners=False)
             masks = masks[:, 0]
             masks = masks.sigmoid() > 0.5
             masks = masks.cpu().numpy()
             ret_masks.append(masks)
 
-        return {'prediction': predict, 'prediction_masks': ret_masks,}
+        return_dict = {'prediction': predict, 'prediction_masks': ret_masks}
+        return_dict["sample_idx"] = sample_idx
+        return return_dict
 
 def get_seg_hidden_states(hidden_states, output_ids, seg_id):
     seg_mask = output_ids == seg_id

@@ -1,6 +1,6 @@
 # Sa2VA-i: Improving Sa2VA Results with Consistent Training and Inference
 
-[![Paper](https://img.shields.io/badge/arXiv-2509.xxxxx-b31b1b.svg)](https://arxiv.org/abs/2509.xxxxx)
+[![Paper](https://img.shields.io/badge/arXiv-2509.19082-b31b1b.svg)](https://arxiv.org/abs/2509.19082)
 [![GitHub](https://img.shields.io/badge/GitHub-Code-success)](https://github.com/kumuji/sa2va-i)
 
 **3rd Place Report of LSVOS 2025 MeViS Track**
@@ -9,7 +9,7 @@
 
 <sup>1</sup>RWTH Aachen University · <sup>2</sup>Eindhoven University of Technology
 
-![Teaser](arxiv_xxxxx.png)
+![Teaser](https://arxiv.org/html/2509.19082v1/x1.png)
 
 ## 🚀 Overview
 
@@ -76,7 +76,7 @@ If you use Sa2VA-i in your research, please cite:
 @article{sa2va2025improved,
   title={Sa2VA-i: Improving Sa2VA Results with Consistent Training and Inference},
   author={Nekrasov, Alexey and Athar, Ali and de Geus, Daan and Hermans, Alexander and Leibe, Bastian},
-  journal={arXiv preprint arXiv:2501.04001},
+  journal={arXiv preprint arXiv:2509.19082},
   year={2025}
 }
 ```

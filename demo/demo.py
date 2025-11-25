@@ -1,4 +1,5 @@
 import argparse
+import torch
 import os
 
 from PIL import Image
@@ -62,23 +63,24 @@ if __name__ == "__main__":
         vid_frames.append(img)
 
 
-    if cfg.select > 0:
-        img_frame = vid_frames[cfg.select - 1]
+    with torch.inference_mode():
+        if cfg.select > 0:
+            img_frame = vid_frames[cfg.select - 1]
 
-        print(f"Selected frame {cfg.select}")
-        print(f"The input is:\n{cfg.text}")
-        result = model.predict_forward(
-            image=img_frame,
-            text=cfg.text,
-            tokenizer=tokenizer,
-        )
-    else:
-        print(f"The input is:\n{cfg.text}")
-        result = model.predict_forward(
-            video=vid_frames,
-            text=cfg.text,
-            tokenizer=tokenizer,
-        )
+            print(f"Selected frame {cfg.select}")
+            print(f"The input is:\n{cfg.text}")
+            result = model.predict_forward(
+                image=img_frame,
+                text=cfg.text,
+                tokenizer=tokenizer,
+            )
+        else:
+            print(f"The input is:\n{cfg.text}")
+            result = model.predict_forward(
+                video=vid_frames,
+                text=cfg.text,
+                tokenizer=tokenizer,
+            )
 
     prediction = result['prediction']
     print(f"The output is:\n{prediction}")

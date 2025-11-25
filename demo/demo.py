@@ -16,10 +16,11 @@ except ImportError:
 def parse_args():
     parser = argparse.ArgumentParser(description='Video Reasoning Segmentation')
     parser.add_argument('image_folder', help='Path to image file')
-    parser.add_argument('--model_path', default="ByteDance/Sa2VA-8B")
+    parser.add_argument('--model_path', default="kumuji/Sa2VA-i-4B")
     parser.add_argument('--work-dir', default=None, help='The dir to save results.')
     parser.add_argument('--text', type=str, default="<image>Please describe the video content.")
     parser.add_argument('--select', type=int, default=-1)
+    parser.add_argument('--sample-num-frames', type=int, default=12)
     args = parser.parse_args()
     return args
 
@@ -73,6 +74,7 @@ if __name__ == "__main__":
                 image=img_frame,
                 text=cfg.text,
                 tokenizer=tokenizer,
+                sample_num_frames=cfg.sample_num_frames
             )
         else:
             print(f"The input is:\n{cfg.text}")
@@ -80,6 +82,7 @@ if __name__ == "__main__":
                 video=vid_frames,
                 text=cfg.text,
                 tokenizer=tokenizer,
+                sample_num_frames=cfg.sample_num_frames
             )
 
     prediction = result['prediction']

@@ -29,7 +29,7 @@ markdown_default = """
             display: inline-block;
         }
 </style>
-<span class="highlighted-text" style='color:rgb(107, 100, 239)'>Sa2VA</span>
+<span class="highlighted-text" style='color:rgb(107, 100, 239)'>Sa2VA-i</span>
 """
 
 description = """

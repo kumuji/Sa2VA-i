@@ -15,8 +15,8 @@ TORCH_DTYPE_MAP = dict(
     fp16=torch.float16, bf16=torch.bfloat16, fp32=torch.float32, auto='auto')
 
 def parse_args(args):
-    parser = argparse.ArgumentParser(description="Sa2VA Demo")
-    parser.add_argument('hf_path', help='Sa2VA hf path.')
+    parser = argparse.ArgumentParser(description="Sa2VA- Demo")
+    parser.add_argument('hf_path', help='Sa2VA-i hf path.')
     return parser.parse_args(args)
 
 def inference(image, video, follow_up, input_str):
@@ -146,7 +146,7 @@ if __name__ == "__main__":
             gr.Video(label="Output Video", show_download_button=True, format='mp4'),
             gr.Markdown()],
         theme=gr.themes.Soft(), allow_flagging="auto", description=description,
-        title='Sa2VA'
+        title='Sa2VA-i'
     )
 
     demo.queue()

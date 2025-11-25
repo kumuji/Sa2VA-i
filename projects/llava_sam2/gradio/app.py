@@ -72,11 +72,13 @@ def inference(image, video, follow_up, input_str):
             'past_text': past_text,
             'mask_prompts': None,
             'tokenizer': tokenizer,
+            'sample_num_frames': 12,
         }
 
-    return_dict = sa2va_model.predict_forward(**input_dict)
-    global_infos.inputs = return_dict["past_text"]
-    print(return_dict['past_text'])
+    with torch.inference_mode():
+        return_dict = sa2va_model.predict_forward(**input_dict)
+    global_infos.inputs = return_dict["prediction"]
+    print(return_dict['prediction'])
     if 'prediction_masks' in return_dict.keys() and return_dict['prediction_masks'] and len(
             return_dict['prediction_masks']) != 0:
         if input_type == "image":

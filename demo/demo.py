@@ -88,6 +88,8 @@ if __name__ == "__main__":
     if '[SEG]' in prediction and Visualizer is not None:
         _seg_idx = 0
         pred_masks = result['prediction_masks'][_seg_idx]
+        if cfg.select > 0:
+            vid_frames = vid_frames[cfg.select - 1:cfg.select]
         for frame_idx in range(len(vid_frames)):
             pred_mask = pred_masks[frame_idx]
             if cfg.work_dir:
